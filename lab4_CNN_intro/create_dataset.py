@@ -24,7 +24,7 @@ def get_img(url):
 
 
 def download_images_from_file(label):
-    with open(label + ".txt") as file:
+    with open("links_" + label + ".txt") as file:
         URLs = file.readlines()
 
     URLs = [url.rstrip() for url in URLs]
@@ -65,8 +65,28 @@ def download_images_from_file(label):
             next_img_num += 1
 
 
+def create_csv(labels):
+    labels.sort()
+
+    text = "file label\n"
+
+    for label_num, label in enumerate(labels):
+        label_dir = os.path.join("dataset", label + "s")
+        filenames = os.listdir(label_dir)
+        filenames = [os.path.join(label_dir, filename)
+                     for filename in filenames]
+        for filename in filenames:
+            # save numerical values for labels
+            text += filename + " " + str(label_num) + "\n"
+
+    with open("dataset.csv", "w") as file:
+        file.write(text)
+
+
 if __name__ == '__main__':
-    for file in ["cats",
-                 "dogs",
-                 "owls"]:
-        download_images_from_file(file)
+    #for file in ["cats", "cats", "cats"]:
+    #    download_images_from_file(file)
+
+    labels = ["cat", "dog", "owl"]
+    create_csv(labels)
+
