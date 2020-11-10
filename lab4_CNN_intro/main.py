@@ -42,14 +42,14 @@ def train_val_split(dataset, val_size=0.3):
     plt.savefig("class_count_val.png")
     plt.clf()
 
-    train_set = dataset.iloc[train_indices, :]
-    val_set = dataset.iloc[val_indices, :]
+    train_set = dataset.iloc[train_indices, :].reset_index()
+    val_set = dataset.iloc[val_indices, :].reset_index()
 
     return train_set, val_set
 
 
 def train_model(model, train_loader, val_loader, criterion, optimizer,
-                num_epochs=10):
+                num_epochs=10, is_inception=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     best_model_weights = deepcopy(model.state_dict())
     best_accuracy = 0
@@ -76,8 +76,14 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
             y = y.to(device)
 
             optimizer.zero_grad()
-            outputs = model(X)
-            loss = criterion(outputs, y)
+            if is_inception:
+                outputs, aux_outputs = model(X)
+                loss1 = criterion(outputs, y)
+                loss2 = criterion(aux_outputs, y)
+                loss = loss1 + 0.4 * loss2
+            else:
+                outputs = model(X)
+                loss = criterion(outputs, y)
             loss.backward()
             optimizer.step()
 
@@ -113,7 +119,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
 
                 optimizer.zero_grad()
                 outputs = model(X)
-                _, y_pred = torch.max(outputs, 1)
+                _, y_pred = torch.max(outputs, dim=1)
                 loss = criterion(outputs, y)
 
                 # change loss, labels and predictions to CPU types (float and
@@ -154,7 +160,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
 
     model.load_state_dict(best_model_weights)
     model.eval()
-    return model, losses, accuracies
+    return model
 
 
 def try_mobilenet_v2():
@@ -167,11 +173,11 @@ def try_mobilenet_v2():
     ])
 
     dataset = pd.read_csv("dataset.csv", delimiter=" ")
-    train_set, val_set = train_val_split(dataset, val_size=0.3)
+    train_csv, val_csv = train_val_split(dataset, val_size=0.3)
 
     # prepare dataset, samplers and loaders
-    train_dataset = AnimalsDataset(train_set, transforms=transforms)
-    val_dataset = AnimalsDataset(val_set, transforms=transforms)
+    train_dataset = AnimalsDataset(train_csv, transforms=transforms)
+    val_dataset = AnimalsDataset(val_csv, transforms=transforms)
 
     batch_size = 8
     num_workers = 4
@@ -182,11 +188,11 @@ def try_mobilenet_v2():
     train_sampler = SubsetRandomSampler(train_indices, generator=generator)
     val_sampler = SubsetRandomSampler(val_indices, generator=generator)
 
-    train_loader = DataLoader(dataset,
+    train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
                               sampler=train_sampler,
                               num_workers=num_workers)
-    val_loader = DataLoader(dataset,
+    val_loader = DataLoader(val_dataset,
                             batch_size=batch_size,
                             sampler=val_sampler,
                             num_workers=num_workers)
@@ -208,9 +214,126 @@ def try_mobilenet_v2():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0)
 
-    results = train_model(model, train_loader, val_loader, criterion,
-                          optimizer, num_epochs=50)
+    model = train_model(model, train_loader, val_loader, criterion,
+                        optimizer, num_epochs=50, is_inception=False)
+    torch.save(model.state_dict(), "mobilenet_v2.pth")
+
+
+def try_inception_v3():
+    # values required by InceptionV3
+    transforms = tfms.Compose([
+        tfms.Resize((299, 299)),
+        tfms.ToTensor(),
+        tfms.Normalize(mean=[0.485, 0.456, 0.406],
+                       std=[0.229, 0.224, 0.225])
+    ])
+
+    dataset = pd.read_csv("dataset.csv", delimiter=" ")
+    train_set, val_set = train_val_split(dataset, val_size=0.3)
+
+    # prepare dataset, samplers and loaders
+    train_dataset = AnimalsDataset(train_set, transforms=transforms)
+    val_dataset = AnimalsDataset(val_set, transforms=transforms)
+
+    batch_size = 8
+    num_workers = 4
+    generator = torch.Generator().manual_seed(0)
+
+    train_indices = list(range(len(train_dataset)))
+    val_indices = list(range(len(val_dataset)))
+    train_sampler = SubsetRandomSampler(train_indices, generator=generator)
+    val_sampler = SubsetRandomSampler(val_indices, generator=generator)
+
+    train_loader = DataLoader(train_dataset,
+                              batch_size=batch_size,
+                              sampler=train_sampler,
+                              num_workers=num_workers)
+    val_loader = DataLoader(val_dataset,
+                            batch_size=batch_size,
+                            sampler=val_sampler,
+                            num_workers=num_workers)
+
+    # load model, freeze it for transfer learning, change last layer to 3
+    # classes unfreezing it, send to GPU
+    model = models.inception_v3(pretrained=True)
+
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model.fc = nn.Linear(model.fc.in_features,
+                         out_features=3,
+                         bias=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0)
+
+    model = train_model(model, train_loader, val_loader, criterion,
+                        optimizer, num_epochs=50, is_inception=True)
+    torch.save(model.state_dict(), "inception_v3.pth")
+
+
+def try_inception_v3_with_aug():
+    # values required by InceptionV3
+    transforms = tfms.Compose([
+        tfms.Resize((299, 299)),
+        tfms.RandomHorizontalFlip(),
+        tfms.RandomRotation(20),
+        tfms.ToTensor(),
+        tfms.Normalize(mean=[0.485, 0.456, 0.406],
+                       std=[0.229, 0.224, 0.225])
+    ])
+
+    dataset = pd.read_csv("dataset.csv", delimiter=" ")
+    train_set, val_set = train_val_split(dataset, val_size=0.3)
+
+    # prepare dataset, samplers and loaders
+    train_dataset = AnimalsDataset(train_set, transforms=transforms)
+    val_dataset = AnimalsDataset(val_set, transforms=transforms)
+
+    batch_size = 8
+    num_workers = 4
+    generator = torch.Generator().manual_seed(0)
+
+    train_indices = list(range(len(train_dataset)))
+    val_indices = list(range(len(val_dataset)))
+    train_sampler = SubsetRandomSampler(train_indices, generator=generator)
+    val_sampler = SubsetRandomSampler(val_indices, generator=generator)
+
+    train_loader = DataLoader(train_dataset,
+                              batch_size=batch_size,
+                              sampler=train_sampler,
+                              num_workers=num_workers)
+    val_loader = DataLoader(val_dataset,
+                            batch_size=batch_size,
+                            sampler=val_sampler,
+                            num_workers=num_workers)
+
+    # load model, freeze it for transfer learning, change last layer to 3
+    # classes unfreezing it, send to GPU
+    model = models.inception_v3(pretrained=True)
+
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model.fc = nn.Linear(model.fc.in_features,
+                         out_features=3,
+                         bias=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0)
+
+    model = train_model(model, train_loader, val_loader, criterion,
+                        optimizer, num_epochs=50, is_inception=True)
+    torch.save(model.state_dict(), "inception_v3_aug.pth")
 
 
 if __name__ == '__main__':
-    try_mobilenet_v2()
+    #try_mobilenet_v2()
+    #try_inception_v3()
+    try_inception_v3_with_aug()
