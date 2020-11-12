@@ -1,4 +1,7 @@
 from copy import deepcopy
+import os
+
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -163,7 +166,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
     return model
 
 
-def try_mobilenet_v2():
+def try_mobilenet_v2(dataset_file, save):
     # values required by MobileNetV2
     transforms = tfms.Compose([
         tfms.Resize((224, 244)),
@@ -172,7 +175,7 @@ def try_mobilenet_v2():
                        std=[0.229, 0.224, 0.225])
     ])
 
-    dataset = pd.read_csv("dataset.csv", delimiter=" ")
+    dataset = pd.read_csv(dataset_file, delimiter=" ")
     train_csv, val_csv = train_val_split(dataset, val_size=0.3)
 
     # prepare dataset, samplers and loaders
@@ -216,10 +219,12 @@ def try_mobilenet_v2():
 
     model = train_model(model, train_loader, val_loader, criterion,
                         optimizer, num_epochs=50, is_inception=False)
-    torch.save(model.state_dict(), "mobilenet_v2.pth")
+
+    if save:
+        torch.save(model.state_dict(), "mobilenet_v2.pth")
 
 
-def try_inception_v3():
+def try_inception_v3(dataset_file, save):
     # values required by InceptionV3
     transforms = tfms.Compose([
         tfms.Resize((299, 299)),
@@ -228,7 +233,7 @@ def try_inception_v3():
                        std=[0.229, 0.224, 0.225])
     ])
 
-    dataset = pd.read_csv("dataset.csv", delimiter=" ")
+    dataset = pd.read_csv(dataset_file, delimiter=" ")
     train_set, val_set = train_val_split(dataset, val_size=0.3)
 
     # prepare dataset, samplers and loaders
@@ -272,21 +277,23 @@ def try_inception_v3():
 
     model = train_model(model, train_loader, val_loader, criterion,
                         optimizer, num_epochs=50, is_inception=True)
-    torch.save(model.state_dict(), "inception_v3.pth")
+
+    if save:
+        torch.save(model.state_dict(), "inception_v3.pth")
 
 
-def try_inception_v3_with_aug():
-    # values required by InceptionV3
+def try_inception_v3_with_aug(dataset_file, save):
     transforms = tfms.Compose([
         tfms.Resize((299, 299)),
         tfms.RandomHorizontalFlip(),
         tfms.RandomRotation(20),
+        tfms.RandomResizedCrop((299, 299)),
         tfms.ToTensor(),
         tfms.Normalize(mean=[0.485, 0.456, 0.406],
                        std=[0.229, 0.224, 0.225])
     ])
 
-    dataset = pd.read_csv("dataset.csv", delimiter=" ")
+    dataset = pd.read_csv(dataset_file, delimiter=" ")
     train_set, val_set = train_val_split(dataset, val_size=0.3)
 
     # prepare dataset, samplers and loaders
@@ -330,10 +337,88 @@ def try_inception_v3_with_aug():
 
     model = train_model(model, train_loader, val_loader, criterion,
                         optimizer, num_epochs=50, is_inception=True)
-    torch.save(model.state_dict(), "inception_v3_aug.pth")
+
+    if save:
+        torch.save(model.state_dict(), "inception_v3_aug.pth")
+
+
+def check_mistakes(dataset_file):
+    model = models.mobilenet_v2(pretrained=True)
+    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features,
+                                     out_features=3,
+                                     bias=True)
+    model.load_state_dict(torch.load("mobilenet_v2.pth"))
+    model.eval()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    transforms = tfms.Compose([
+        tfms.Resize((224, 244)),
+        tfms.ToTensor(),
+        tfms.Normalize(mean=mean, std=std)
+    ])
+
+    mean = torch.tensor(mean, dtype=torch.float32)
+    std = torch.tensor(std, dtype=torch.float32)
+    unnormalize = tfms.Normalize((-mean / std).tolist(), (1.0 / std).tolist())
+
+
+    dataset = pd.read_csv(dataset_file, delimiter=" ")
+    val_csv = train_val_split(dataset, val_size=0.3)[1]
+
+    # prepare dataset, samplers and loaders
+    val_dataset = AnimalsDataset(val_csv, transforms=transforms)
+
+    batch_size = 64
+    num_workers = 4
+    val_loader = DataLoader(val_dataset,
+                            batch_size=batch_size,
+                            num_workers=num_workers)
+
+    img_num = 1
+    label_wrong = {0: 0, 1: 0, 2: 0}
+    batch_accuracies = []
+    with torch.no_grad():
+        for X, y in val_loader:
+            X = X.to(device)
+            y = y.to(device)
+
+            outputs = model(X)
+            _, y_pred = torch.max(outputs, dim=1)
+
+            # change loss, labels and predictions to CPU types (float and
+            # Numpy arrays)
+            y = y.cpu().numpy()
+            y_pred = y_pred.detach().cpu().numpy()
+
+            for i in range(y.shape[0]):
+                if y[i] == y_pred[i]:
+                    continue
+
+                label_wrong[y[i]] += 1
+
+                img = X[i]
+                img = unnormalize(img)
+                img = img.permute(1, 2, 0).cpu().numpy() * 255
+                img = img.astype(np.uint8)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                filename = str(y[i]) + "_instead_of_" + \
+                           str(y_pred[i]) + "_" + str(img_num) + ".png"
+                filepath = os.path.join("wrong_classified", filename)
+                cv2.imwrite(filepath, img)
+                img_num += 1
+
+            batch_accuracies.append(accuracy_score(y, y_pred))
+
+    print(label_wrong)
 
 
 if __name__ == '__main__':
-    #try_mobilenet_v2()
-    #try_inception_v3()
-    try_inception_v3_with_aug()
+    #try_mobilenet_v2("dataset.csv", save=True)
+    #try_inception_v3("dataset.csv", save=True)
+    #try_inception_v3_with_aug("dataset.csv", save=False)
+    check_mistakes("dataset.csv")
+    #try_mobilenet_v2("dataset_2.csv", save=False)

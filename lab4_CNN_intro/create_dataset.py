@@ -19,7 +19,7 @@ def get_img(url):
             return response
         else:
             return None
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -41,7 +41,7 @@ def download_images_from_file(label):
 
         for result in results:
             filename = str(next_img_num) + ".png"
-            filepath = os.path.join("dataset", label, filename)
+            filepath = os.path.join("dataset_2", label, filename)
             img_bytes = BytesIO(result.content)
             img = cv2.imdecode(np.frombuffer(img_bytes.read(), np.uint8),
                                flags=1)
@@ -71,7 +71,7 @@ def create_csv(labels):
     text = "file label\n"
 
     for label_num, label in enumerate(labels):
-        label_dir = os.path.join("dataset", label + "s")
+        label_dir = os.path.join("dataset_2", label)
         filenames = os.listdir(label_dir)
         filenames = [os.path.join(label_dir, filename)
                      for filename in filenames]
@@ -79,7 +79,7 @@ def create_csv(labels):
             # save numerical values for labels
             text += filename + " " + str(label_num) + "\n"
 
-    with open("dataset.csv", "w") as file:
+    with open("dataset_2.csv", "w") as file:
         file.write(text)
 
 
@@ -87,6 +87,11 @@ if __name__ == '__main__':
     #for file in ["cats", "cats", "cats"]:
     #    download_images_from_file(file)
 
-    labels = ["cat", "dog", "owl"]
-    create_csv(labels)
+    #labels = ["cat", "dog", "owl"]
+    #create_csv(labels)
 
+    #for file in ["deku", "naruto", "saitama"]:
+    #    download_images_from_file(file)
+
+    labels = ["deku", "naruto", "saitama"]
+    create_csv(labels)
